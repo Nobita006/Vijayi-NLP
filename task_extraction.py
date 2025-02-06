@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
 Improved NLP Pipeline for Extracting and Categorizing Tasks from Unstructured Text
-using the Elbow Method for Cluster Selection.
+with Methods to Determine the Optimal Number of Clusters (Elbow Method and Silhouette Score).
 
 Improvements include:
     - Reading input text from a file.
-    - Using the elbow method to help decide the number of clusters.
+    - Two methods for selecting the number of clusters:
+        1. The Elbow Method (plots inertia for different k values).
+        2. The Silhouette Score (automatically selects k with highest score).
     - Pretty-printing output in JSON format.
     - Modular structure with clear functions and command-line argument parsing.
-    - Adjusting the max clusters to not exceed the number of task samples.
+    - Adjusting the maximum clusters to not exceed the number of task samples.
 """
 
 import argparse
@@ -21,6 +23,7 @@ import spacy
 from spacy.lang.en.stop_words import STOP_WORDS
 
 from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
 from gensim import corpora, models
 
 # Load the spaCy model (with medium-sized vectors)
@@ -206,7 +209,7 @@ def label_clusters_with_lda(tasks, num_topics=1):
     return tasks, cluster_labels
 
 
-def determine_optimal_clusters(task_vectors, min_clusters=2, max_clusters=10):
+def determine_optimal_clusters_elbow(task_vectors, min_clusters=2, max_clusters=10):
     """
     Use the elbow method to display a plot of inertia for different numbers
     of clusters. The function adjusts max_clusters if there are fewer samples.
@@ -240,12 +243,39 @@ def determine_optimal_clusters(task_vectors, min_clusters=2, max_clusters=10):
         print(f"Clusters: {k}, Inertia: {inertia}")
 
 
+def determine_optimal_clusters_silhouette(task_vectors, min_clusters=2, max_clusters=10):
+    """
+    Compute the average silhouette score for different numbers of clusters
+    and return the number of clusters with the highest score.
+    Adjusts max_clusters to be at most n_samples - 1.
+    """
+    n_samples = task_vectors.shape[0]
+    
+    if n_samples < min_clusters:
+        min_clusters = n_samples
+    # Ensure max_clusters does not exceed n_samples - 1, because silhouette_score requires 2 <= k <= n_samples-1.
+    max_clusters = min(max_clusters, n_samples - 1)
+
+    silhouette_scores = []
+    cluster_range = range(min_clusters, max_clusters + 1)
+    for k in cluster_range:
+        kmeans = KMeans(n_clusters=k, random_state=42)
+        labels = kmeans.fit_predict(task_vectors)
+        score = silhouette_score(task_vectors, labels)
+        silhouette_scores.append(score)
+        print(f"Clusters: {k}, Silhouette Score: {score:.3f}")
+    
+    optimal_k = cluster_range[np.argmax(silhouette_scores)]
+    print(f"\nOptimal number of clusters based on silhouette score: {optimal_k}")
+    return optimal_k
+
+
 ##############################################
 # Main Function with Argument Parsing
 ##############################################
 def main():
     parser = argparse.ArgumentParser(
-        description="Extract and categorize tasks from unstructured text using the Elbow Method for cluster selection."
+        description="Extract and categorize tasks from unstructured text using methods to determine the optimal number of clusters."
     )
     parser.add_argument(
         "--input", "-i", type=str, required=True,
@@ -253,11 +283,16 @@ def main():
     )
     parser.add_argument(
         "--min_clusters", type=int, default=2,
-        help="Minimum number of clusters to try for the elbow method (default: 2)."
+        help="Minimum number of clusters to try (default: 2)."
     )
     parser.add_argument(
         "--max_clusters", type=int, default=10,
-        help="Maximum number of clusters to try for the elbow method (default: 10)."
+        help="Maximum number of clusters to try (default: 10)."
+    )
+    parser.add_argument(
+        "--method", type=str, default="silhouette",
+        choices=["elbow", "silhouette"],
+        help="Method to determine optimal clusters: 'elbow' (manual) or 'silhouette' (automatic). Default is silhouette."
     )
     args = parser.parse_args()
 
@@ -285,11 +320,14 @@ def main():
         task_vectors.append(doc.vector)
     task_vectors = np.array(task_vectors)
 
-    print("\nDetermining the optimal number of clusters using the Elbow Method...")
-    determine_optimal_clusters(task_vectors, min_clusters=args.min_clusters, max_clusters=args.max_clusters)
-
-    # After reviewing the elbow plot, prompt the user to input the desired number of clusters.
-    num_clusters = int(input("Based on the elbow plot, enter the desired number of clusters: "))
+    # Determine the number of clusters using the selected method.
+    if args.method == "elbow":
+        print("\nDetermining the optimal number of clusters using the Elbow Method...")
+        determine_optimal_clusters_elbow(task_vectors, min_clusters=args.min_clusters, max_clusters=args.max_clusters)
+        num_clusters = int(input("Based on the elbow plot, enter the desired number of clusters: "))
+    else:  # Use silhouette method
+        print("\nDetermining the optimal number of clusters using the Silhouette Score...")
+        num_clusters = determine_optimal_clusters_silhouette(task_vectors, min_clusters=args.min_clusters, max_clusters=args.max_clusters)
 
     tasks, kmeans, _ = cluster_tasks(tasks, num_clusters)
     tasks, cluster_labels = label_clusters_with_lda(tasks, num_topics=1)
